@@ -1,0 +1,219 @@
+import { describe, expect, it, vi } from 'vitest'
+import { LinearClient, LinearError } from '../src/client.ts'
+
+function jsonGraphql(body: unknown): Response {
+  return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } })
+}
+
+const issueNode = {
+  id: 'issue-1',
+  identifier: 'ABC-1',
+  title: 'Fix checkout',
+  description: 'The button does nothing.',
+  priority: 2,
+  priorityLabel: 'High',
+  url: 'https://linear.app/acme/issue/ABC-1',
+  createdAt: '2026-08-01T00:00:00Z',
+  updatedAt: '2026-08-02T00:00:00Z',
+  dueDate: null,
+  team: { id: 'team-1', key: 'ABC', name: 'Acme' },
+  state: { id: 'state-1', name: 'In Progress', type: 'started' },
+  project: { id: 'project-1', name: 'Checkout' },
+  cycle: { id: 'cycle-1', name: 'Cycle 5' },
+  assignee: { id: 'user-1', name: 'Alice', displayName: 'Alice' },
+  labels: { nodes: [{ id: 'label-1', name: 'bug' }] },
+}
+
+describe('LinearClient', () => {
+  it('posts GraphQL with the API key and maps search results', async () => {
+    const fetchImpl = vi.fn(async () => jsonGraphql({ data: { searchIssues: { nodes: [issueNode] } } }))
+    const client = new LinearClient({ apiKey: 'lin_api_test', fetchImpl })
+    const items = await client.searchIssues('checkout', { teamId: 'team-1', limit: 10 })
+
+    expect(items[0]).toMatchObject({
+      identifier: 'ABC-1',
+      title: 'Fix checkout',
+      status: 'In Progress',
+      stateType: 'started',
+      teamKey: 'ABC',
+      projectName: 'Checkout',
+      assigneeName: 'Alice',
+      labels: ['bug'],
+    })
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://api.linear.app/graphql')
+    expect(init.method).toBe('POST')
+    expect(init.headers).toMatchObject({ authorization: 'lin_api_test' })
+    const body = JSON.parse(String(init.body))
+    expect(body.variables).toEqual({ term: 'checkout', teamId: 'team-1', first: 10 })
+    expect(body.query).toContain('searchIssues')
+  })
+
+  it('listIssues builds an IssueFilter and clamps the limit', async () => {
+    const fetchImpl = vi.fn(async () => jsonGraphql({ data: { issues: { nodes: [issueNode] } } }))
+    const client = new LinearClient({ apiKey: 'lin_api_test', fetchImpl })
+    await client.listIssues({
+      teamId: 'team-1',
+      projectId: 'project-1',
+      cycleId: 'cycle-1',
+      stateType: 'started',
+      limit: 500,
+    })
+    const body = JSON.parse(String((fetchImpl.mock.calls[0] as [string, RequestInit])[1]?.body))
+    expect(body.variables.first).toBe(100)
+    expect(body.variables.filter).toEqual({
+      team: { id: { eq: 'team-1' } },
+      project: { id: { eq: 'project-1' } },
+      cycle: { id: { eq: 'cycle-1' } },
+      state: { type: { eq: 'started' } },
+    })
+  })
+
+  it('getIssue maps detail and supports identifier lookup fallback', async () => {
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(jsonGraphql({ data: { issue: null } }))
+      .mockResolvedValueOnce(jsonGraphql({ data: { searchIssues: { nodes: [issueNode] } } }))
+      .mockResolvedValueOnce(jsonGraphql({ data: { issue: issueNode } }))
+    const client = new LinearClient({ apiKey: 'lin_api_test', fetchImpl })
+    const issue = await client.getIssue('ABC-1')
+
+    expect(issue).toMatchObject({ identifier: 'ABC-1', description: 'The button does nothing.' })
+    expect(fetchImpl).toHaveBeenCalledTimes(3)
+    expect(JSON.parse(String((fetchImpl.mock.calls[1] as [string, RequestInit])[1]?.body)).query).toContain('searchIssues')
+  })
+
+  it('getIssue throws 404 when a UUID is not found', async () => {
+    const client = new LinearClient({ apiKey: 'lin_api_test', fetchImpl: vi.fn(async () => jsonGraphql({ data: { issue: null } })) })
+    await expect(client.getIssue('7f000001-...')).rejects.toMatchObject({ status: 404 })
+  })
+
+  it('createIssue sends IssueCreateInput and returns the created issue', async () => {
+    const fetchImpl = vi.fn(async () => jsonGraphql({
+      data: { issueCreate: { success: true, issue: { id: 'issue-2', identifier: 'ABC-2', url: 'https://linear.app/acme/issue/ABC-2' } } },
+    }))
+    const client = new LinearClient({ apiKey: 'lin_api_test', fetchImpl })
+    const result = await client.createIssue({
+      teamId: 'team-1',
+      title: 'New bug',
+      description: 'Details',
+      priority: 2,
+      projectId: 'project-1',
+      cycleId: 'cycle-1',
+      assigneeId: 'user-1',
+      labelIds: ['label-1'],
+      stateId: 'state-1',
+      dueDate: '2026-09-30',
+    })
+
+    const body = JSON.parse(String((fetchImpl.mock.calls[0] as [string, RequestInit])[1]?.body))
+    expect(body.variables.input).toEqual({
+      teamId: 'team-1',
+      title: 'New bug',
+      description: 'Details',
+      priority: 2,
+      projectId: 'project-1',
+      cycleId: 'cycle-1',
+      assigneeId: 'user-1',
+      labelIds: ['label-1'],
+      stateId: 'state-1',
+      dueDate: '2026-09-30',
+    })
+    expect(result).toEqual({ created: true, id: 'issue-2', identifier: 'ABC-2', url: 'https://linear.app/acme/issue/ABC-2' })
+  })
+
+  it('maps GraphQL user errors to business failures and auth errors to infrastructure errors', async () => {
+    const userError = new LinearClient({ apiKey: 'lin_api_test', fetchImpl: vi.fn(async () => jsonGraphql({
+      errors: [{ message: 'Team not found', extensions: { code: 'BAD_USER_INPUT' } }],
+    })) })
+    expect(await userError.createIssue({ teamId: 'missing', title: 'x' })).toMatchObject({
+      created: false,
+      reason: 'Team not found',
+    })
+
+    const authError = new LinearClient({ apiKey: 'bad', fetchImpl: vi.fn(async () => jsonGraphql({
+      errors: [{ message: 'Authentication required', extensions: { code: 'AUTHENTICATION_ERROR' } }],
+    })) })
+    await expect(authError.createIssue({ teamId: 'team-1', title: 'x' })).rejects.toThrow(LinearError)
+  })
+
+  it('updateIssue and addIssueComment send the expected mutations', async () => {
+    const updateFetch = vi.fn(async () => jsonGraphql({ data: { issueUpdate: { success: true, issue: { id: 'issue-1' } } } }))
+    const client = new LinearClient({ apiKey: 'lin_api_test', fetchImpl: updateFetch })
+    const update = await client.updateIssue('issue-1', { title: 'Renamed', stateId: 'state-2' })
+    const updateBody = JSON.parse(String((updateFetch.mock.calls[0] as [string, RequestInit])[1]?.body))
+    expect(updateBody.variables).toEqual({ id: 'issue-1', input: { title: 'Renamed', stateId: 'state-2' } })
+    expect(update).toEqual({ ok: true, id: 'issue-1' })
+
+    const commentFetch = vi.fn(async () => jsonGraphql({
+      data: { commentCreate: { success: true, comment: { id: 'comment-1' } } },
+    }))
+    const commentClient = new LinearClient({ apiKey: 'lin_api_test', fetchImpl: commentFetch })
+    const comment = await commentClient.addIssueComment('issue-1', 'Looks good')
+    const commentBody = JSON.parse(String((commentFetch.mock.calls[0] as [string, RequestInit])[1]?.body))
+    expect(commentBody.variables.input).toEqual({ issueId: 'issue-1', body: 'Looks good' })
+    expect(comment).toEqual({ ok: true, id: 'comment-1' })
+  })
+
+  it('listIssueComments maps author and body fields', async () => {
+    const fetchImpl = vi.fn(async () => jsonGraphql({
+      data: { issue: { comments: { nodes: [{
+        id: 'comment-1',
+        body: 'Please fix',
+        user: { id: 'user-1', name: 'Alice', displayName: 'Alice' },
+        createdAt: '2026-08-02T00:00:00Z',
+        updatedAt: '2026-08-02T00:00:00Z',
+        url: 'https://linear.app/acme/issue/ABC-1/comment/comment-1',
+      }] } } },
+    }))
+    const client = new LinearClient({ apiKey: 'lin_api_test', fetchImpl })
+    const result = await client.listIssueComments('issue-1')
+    expect(result.items[0]).toMatchObject({ author: 'Alice', body: 'Please fix' })
+  })
+
+  it('maps cycles, projects, and teams', async () => {
+    const cycleFetch = vi.fn(async () => jsonGraphql({
+      data: { team: { cycles: { nodes: [{
+        id: 'cycle-1', name: 'Cycle 5', number: 5,
+        startsAt: '2026-08-01T00:00:00Z', endsAt: '2026-08-14T00:00:00Z',
+        completedAt: null, progress: 0.4,
+      }] } } },
+    }))
+    const cycles = new LinearClient({ apiKey: 't', fetchImpl: cycleFetch })
+    expect(await cycles.listCycles('team-1', { limit: 3 })).toMatchObject([
+      { id: 'cycle-1', number: 5, progress: 0.4 },
+    ])
+
+    const projectFetch = vi.fn(async () => jsonGraphql({
+      data: { project: {
+        id: 'project-1', name: 'Checkout', description: 'd', status: { name: 'In Progress', type: 'started' },
+        startDate: '2026-09-01', targetDate: '2026-10-01', health: 'onTrack', progress: 0.5,
+        teams: { nodes: [{ id: 'team-1', key: 'ABC', name: 'Acme' }] },
+        url: 'https://linear.app/acme/project/project-1',
+      } },
+    }))
+    const projects = new LinearClient({ apiKey: 't', fetchImpl: projectFetch })
+    expect(await projects.getProject('project-1')).toMatchObject({
+      id: 'project-1',
+      status: 'In Progress',
+      teamKeys: ['ABC'],
+    })
+
+    const teamFetch = vi.fn(async () => jsonGraphql({
+      data: { team: {
+        id: 'team-1', key: 'ABC', name: 'Acme', description: 'Product', icon: null, color: 'blue',
+        issueCount: 42, updatedAt: '2026-08-02T00:00:00Z',
+      } },
+    }))
+    const teams = new LinearClient({ apiKey: 't', fetchImpl: teamFetch })
+    expect(await teams.getTeam('team-1')).toMatchObject({ key: 'ABC', issueCount: 42 })
+  })
+
+  it('strips a trailing slash from a baseUrl override and checks hasToken', async () => {
+    const fetchImpl = vi.fn(async () => jsonGraphql({ data: { teams: { nodes: [] } } }))
+    const client = new LinearClient({ baseUrl: 'https://linear.example.com/graphql/', fetchImpl })
+    expect(client.hasToken()).toBe(false)
+    await client.listTeams()
+    expect(fetchImpl.mock.calls[0][0]).toBe('https://linear.example.com/graphql')
+    expect(new LinearClient({ apiKey: 'x' }).hasToken()).toBe(true)
+  })
+})
