@@ -574,30 +574,44 @@ export class LinearClient {
   async listIssueComments(id: string, options: { limit?: number; signal?: AbortSignal } = {}): Promise<{
     items: LinearCommentItem[]
   }> {
-    const data = await this.request<{ issue: { comments: { nodes: Array<{
-      id: string
-      body: string | null
-      user: { id: string; name: string; displayName: string } | null
-      createdAt: string
-      updatedAt: string
-      url: string
-    }> } } | null }>(
-      `
-        query IssueComments($id: String!, $first: Int) {
-          issue(id: $id) {
-            comments(first: $first) {
-              nodes {
-                ${COMMENT_FIELDS}
+    try {
+      const data = await this.request<{ issue: { comments: { nodes: Array<{
+        id: string
+        body: string | null
+        user: { id: string; name: string; displayName: string } | null
+        createdAt: string
+        updatedAt: string
+        url: string
+      }> } } | null }>(
+        `
+          query IssueComments($id: String!, $first: Int) {
+            issue(id: $id) {
+              comments(first: $first) {
+                nodes {
+                  ${COMMENT_FIELDS}
+                }
               }
             }
           }
-        }
-      `,
-      { id, first: clampLimit(options.limit ?? 20) },
-      options.signal,
-    )
-    if (!data.issue) throw new LinearError('Linear issue not found', 404, 'NOT_FOUND')
-    return { items: (data.issue.comments?.nodes ?? []).map(mapComment) }
+        `,
+        { id, first: clampLimit(options.limit ?? 20) },
+        options.signal,
+      )
+      if (!data.issue) throw new LinearError('Linear issue not found', 404, 'NOT_FOUND')
+      return { items: (data.issue.comments?.nodes ?? []).map(mapComment) }
+    } catch (error) {
+      if (
+        error instanceof LinearError &&
+        (error.status === 404 || /not found/i.test(error.message)) &&
+        /^[A-Z]+-\d+$/i.test(id)
+      ) {
+        const results = await this.searchIssues(id, { limit: 1, signal: options.signal })
+        const found = results.find(issue => issue.identifier.toLowerCase() === id.toLowerCase())
+        if (!found) throw new LinearError('Linear issue not found', 404, 'NOT_FOUND')
+        return this.listIssueComments(found.id, options)
+      }
+      throw error
+    }
   }
 
   async addIssueComment(id: string, body: string, signal?: AbortSignal): Promise<LinearWriteResult> {

@@ -170,6 +170,29 @@ describe('LinearClient', () => {
     expect(result.items[0]).toMatchObject({ author: 'Alice', body: 'Please fix' })
   })
 
+  it('listIssueComments resolves an identifier fallback', async () => {
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(jsonGraphql({ data: { issue: null } }))
+      .mockResolvedValueOnce(jsonGraphql({ data: { searchIssues: { nodes: [issueNode] } } }))
+      .mockResolvedValueOnce(jsonGraphql({
+        data: { issue: { comments: { nodes: [{
+          id: 'comment-1',
+          body: 'Please fix',
+          user: { id: 'user-1', name: 'Alice', displayName: 'Alice' },
+          createdAt: '2026-08-02T00:00:00Z',
+          updatedAt: '2026-08-02T00:00:00Z',
+          url: 'https://linear.app/acme/issue/ABC-1/comment/comment-1',
+        }] } } },
+      }))
+    const client = new LinearClient({ apiKey: 'lin_api_test', fetchImpl })
+    const result = await client.listIssueComments('ABC-1', { limit: 5 })
+
+    expect(result.items[0]).toMatchObject({ author: 'Alice', body: 'Please fix' })
+    expect(fetchImpl).toHaveBeenCalledTimes(3)
+    const body = JSON.parse(String((fetchImpl.mock.calls[2] as [string, RequestInit])[1]?.body))
+    expect(body.variables).toEqual({ id: 'issue-1', first: 5 })
+  })
+
   it('maps cycles, projects, and teams', async () => {
     const cycleFetch = vi.fn(async () => jsonGraphql({
       data: { team: { cycles: { nodes: [{
