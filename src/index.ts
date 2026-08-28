@@ -822,6 +822,254 @@ export function createTools(client: LinearClient) {
         }
       },
     }),
+
+    defineTool({
+      name: 'linear_list_labels',
+      description: 'List Linear issue labels, optionally scoped to a team.',
+      parameters: {
+        teamId: { type: 'string', description: 'Optional Linear team UUID to narrow labels' },
+        limit: { type: 'integer', description: 'Maximum labels, 1-100 (default 20)' },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            authenticated: { type: 'boolean' },
+            found: { type: 'boolean' },
+            reason: { type: 'string' },
+            items: {
+              type: 'array',
+              items: {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                  id: { type: 'string' },
+                  name: { type: 'string' },
+                  color: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+                  description: { type: 'string' },
+                  parentId: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+                  parentName: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+                  teamId: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+                  teamKey: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+                  teamName: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+                  url: { type: 'string' },
+                },
+              },
+            },
+          },
+        },
+        render: (_args, value) => {
+          if (!value.authenticated) return [{ type: 'text', text: 'Listing Linear labels requires an API key.' }]
+          if (!value.found) return [{ type: 'text', text: value.reason ?? 'Linear labels are not accessible.' }]
+          return renderLabelList(value.items ?? [])
+        },
+      },
+      presentCall(args): ToolCallView {
+        return { card: 'generic', title: args.teamId ? `Labels for ${args.teamId}` : 'Linear labels', kind: 'search' }
+      },
+      presentResult(_args, result): ToolResultView | undefined {
+        const v = result as unknown as { authenticated?: boolean; found?: boolean; items?: unknown[] }
+        if (!v.authenticated) return { card: 'generic', title: 'Requires Linear API key' }
+        if (!v.found) return { card: 'generic', title: 'Labels unavailable' }
+        return { card: 'generic', title: `${(v.items ?? []).length} label(s)` }
+      },
+      async execute(args, exec) {
+        if (!client.hasToken()) return { authenticated: false, found: false, items: [], reason: 'Listing Linear labels requires a Linear API key.' }
+        try {
+          const items = await client.listLabels({ teamId: args.teamId, limit: clampLimit(args.limit), signal: exec.signal })
+          return { authenticated: true, found: true, items }
+        } catch (error) {
+          if (error instanceof LinearError && (error.status === 404 || /not found/i.test(error.message))) {
+            return { authenticated: true, found: false, items: [], reason: 'Linear team not found.' }
+          }
+          throw error
+        }
+      },
+    }),
+
+    defineTool({
+      name: 'linear_get_label',
+      description: 'Get one Linear issue label by UUID.',
+      parameters: {
+        id: { type: 'string', required: true, description: 'Linear label UUID' },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            authenticated: { type: 'boolean' },
+            found: { type: 'boolean' },
+            reason: { type: 'string' },
+            id: { type: 'string' },
+            name: { type: 'string' },
+            color: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+            description: { type: 'string' },
+            parentId: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+            parentName: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+            teamId: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+            teamKey: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+            teamName: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+            url: { type: 'string' },
+          },
+        },
+        render: (_args, value) => {
+          if (!value.authenticated) return [{ type: 'text', text: 'Reading a Linear label requires an API key.' }]
+          if (!value.found) return [{ type: 'text', text: 'Linear label not found.' }]
+          const lines = [
+            `${value.name ?? ''}`,
+            value.color ? `color: ${value.color}` : '',
+            value.teamKey ? `team: ${value.teamKey} ${value.teamName ?? ''}` : '',
+            value.parentName ? `parent: ${value.parentName}` : '',
+            value.description ? `description:\n${value.description}` : '',
+            value.url ?? '',
+          ].filter(Boolean)
+          return [{ type: 'text', text: lines.join('\n') }]
+        },
+      },
+      presentCall(args): ToolCallView {
+        return { card: 'generic', title: `Linear label ${args.id}`, kind: 'read' }
+      },
+      presentResult(_args, result): ToolResultView | undefined {
+        const v = result as unknown as { authenticated?: boolean; found?: boolean; name?: string }
+        if (!v.authenticated) return { card: 'generic', title: 'Requires Linear API key' }
+        if (!v.found) return { card: 'generic', title: 'Label not found' }
+        return { card: 'generic', title: v.name ?? 'Linear label' }
+      },
+      async execute(args, exec) {
+        if (!client.hasToken()) return { authenticated: false, found: false, reason: 'Reading a Linear label requires a Linear API key.' }
+        try {
+          const info = await client.getLabel(args.id as string, exec.signal)
+          return { authenticated: true, found: true, ...info }
+        } catch (error) {
+          if (error instanceof LinearError && (error.status === 404 || /not found/i.test(error.message))) {
+            return { authenticated: true, found: false }
+          }
+          throw error
+        }
+      },
+    }),
+
+    defineTool({
+      name: 'linear_list_users',
+      description: 'List Linear users visible to the API key, optionally filtered by name, display name, or email.',
+      parameters: {
+        query: { type: 'string', description: 'Optional case-insensitive text matched against name, display name, or email' },
+        limit: { type: 'integer', description: 'Maximum users, 1-100 (default 20)' },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            authenticated: { type: 'boolean' },
+            found: { type: 'boolean' },
+            reason: { type: 'string' },
+            items: {
+              type: 'array',
+              items: {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                  id: { type: 'string' },
+                  name: { type: 'string' },
+                  displayName: { type: 'string' },
+                  email: { type: 'string' },
+                  avatarUrl: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+                  active: { type: 'boolean' },
+                  timezone: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+                  createdAt: { type: 'string' },
+                  updatedAt: { type: 'string' },
+                  url: { type: 'string' },
+                },
+              },
+            },
+          },
+        },
+        render: (_args, value) => {
+          if (!value.authenticated) return [{ type: 'text', text: 'Listing Linear users requires an API key.' }]
+          if (!value.found) return [{ type: 'text', text: value.reason ?? 'Linear users are not accessible.' }]
+          return renderUserList(value.items ?? [])
+        },
+      },
+      presentCall(args): ToolCallView {
+        return { card: 'generic', title: args.query ? `Search Linear users: ${args.query}` : 'Linear users', kind: 'search' }
+      },
+      presentResult(_args, result): ToolResultView | undefined {
+        const v = result as unknown as { authenticated?: boolean; found?: boolean; items?: unknown[] }
+        if (!v.authenticated) return { card: 'generic', title: 'Requires Linear API key' }
+        if (!v.found) return { card: 'generic', title: 'Users unavailable' }
+        return { card: 'generic', title: `${(v.items ?? []).length} user(s)` }
+      },
+      async execute(args, exec) {
+        if (!client.hasToken()) return { authenticated: false, found: false, items: [], reason: 'Listing Linear users requires a Linear API key.' }
+        const items = await client.listUsers({ query: args.query, limit: clampLimit(args.limit), signal: exec.signal })
+        return { authenticated: true, found: true, items }
+      },
+    }),
+
+    defineTool({
+      name: 'linear_get_user',
+      description: 'Get one Linear user by UUID.',
+      parameters: {
+        id: { type: 'string', required: true, description: 'Linear user UUID' },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            authenticated: { type: 'boolean' },
+            found: { type: 'boolean' },
+            reason: { type: 'string' },
+            id: { type: 'string' },
+            name: { type: 'string' },
+            displayName: { type: 'string' },
+            email: { type: 'string' },
+            avatarUrl: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+            active: { type: 'boolean' },
+            timezone: { oneOf: [{ type: 'string' }, { type: 'null' }] },
+            createdAt: { type: 'string' },
+            updatedAt: { type: 'string' },
+            url: { type: 'string' },
+          },
+        },
+        render: (_args, value) => {
+          if (!value.authenticated) return [{ type: 'text', text: 'Reading a Linear user requires an API key.' }]
+          if (!value.found) return [{ type: 'text', text: 'Linear user not found.' }]
+          const lines = [
+            `${value.displayName ?? value.name ?? ''}`,
+            value.email ? `email: ${value.email}` : '',
+            `active: ${value.active ?? false}`,
+            value.timezone ? `timezone: ${value.timezone}` : '',
+            value.url ?? '',
+          ].filter(Boolean)
+          return [{ type: 'text', text: lines.join('\n') }]
+        },
+      },
+      presentCall(args): ToolCallView {
+        return { card: 'generic', title: `Linear user ${args.id}`, kind: 'read' }
+      },
+      presentResult(_args, result): ToolResultView | undefined {
+        const v = result as unknown as { authenticated?: boolean; found?: boolean; displayName?: string; name?: string }
+        if (!v.authenticated) return { card: 'generic', title: 'Requires Linear API key' }
+        if (!v.found) return { card: 'generic', title: 'User not found' }
+        return { card: 'generic', title: v.displayName ?? v.name ?? 'Linear user' }
+      },
+      async execute(args, exec) {
+        if (!client.hasToken()) return { authenticated: false, found: false, reason: 'Reading a Linear user requires a Linear API key.' }
+        try {
+          const info = await client.getUser(args.id as string, exec.signal)
+          return { authenticated: true, found: true, ...info }
+        } catch (error) {
+          if (error instanceof LinearError && (error.status === 404 || /not found/i.test(error.message))) {
+            return { authenticated: true, found: false }
+          }
+          throw error
+        }
+      },
+    }),
   ]
 }
 
@@ -850,6 +1098,20 @@ function renderTeamList(items: Array<{ key?: string; name?: string; issueCount?:
   if (items.length === 0) return [{ type: 'text' as const, text: 'No Linear teams found.' }]
   return [{ type: 'text' as const, text: items.map(item =>
     `${item.key ?? ''}: ${item.name ?? ''} (${item.issueCount ?? 0} issues)`,
+  ).join('\n') }]
+}
+
+function renderLabelList(items: Array<{ name?: string; color?: string | null; teamKey?: string | null; url?: string }>) {
+  if (items.length === 0) return [{ type: 'text' as const, text: 'No Linear labels found.' }]
+  return [{ type: 'text' as const, text: items.map(item =>
+    `${item.name ?? ''}${item.color ? ` [${item.color}]` : ''} ${item.teamKey ?? ''} ${item.url ?? ''}`,
+  ).join('\n') }]
+}
+
+function renderUserList(items: Array<{ displayName?: string; name?: string; email?: string; active?: boolean }>) {
+  if (items.length === 0) return [{ type: 'text' as const, text: 'No Linear users found.' }]
+  return [{ type: 'text' as const, text: items.map(item =>
+    `${item.displayName ?? item.name ?? 'unknown'} (${item.email ?? ''}, ${item.active ? 'active' : 'inactive'})`,
   ).join('\n') }]
 }
 

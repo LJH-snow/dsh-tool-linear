@@ -1,7 +1,7 @@
 {
   "name": "@libai168/dsh-tool-linear",
-  "description": "Linear tools for DeepSeek Harness: search issues, inspect projects/cycles/teams, create and update tickets, and comment",
-  "version": "0.1.0",
+  "description": "Linear tools for DeepSeek Harness: search issues, inspect projects/cycles/teams/labels/users, create and update tickets, and comment",
+  "version": "0.2.0",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",

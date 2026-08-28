@@ -34,6 +34,29 @@ const issueNode = {
   labels: { nodes: [{ id: 'label-1', name: 'bug' }] },
 }
 
+const labelNode = {
+  id: 'label-1',
+  name: 'bug',
+  color: '#ff0000',
+  description: 'Something is broken',
+  url: 'https://linear.app/acme/label/label-1',
+  parent: null,
+  team: { id: 'team-1', key: 'ABC', name: 'Acme' },
+}
+
+const userNode = {
+  id: 'user-1',
+  name: 'Alice Smith',
+  displayName: 'Alice',
+  email: 'alice@example.com',
+  avatarUrl: null,
+  active: true,
+  timezone: 'Asia/Shanghai',
+  createdAt: '2026-08-01T00:00:00Z',
+  updatedAt: '2026-08-02T00:00:00Z',
+  url: 'https://linear.app/acme/user/user-1',
+}
+
 describe('tool definitions', () => {
   it('registers the planned Linear tool set', () => {
     expect(Object.keys(tools()).sort()).toEqual([
@@ -41,13 +64,17 @@ describe('tool definitions', () => {
       'linear_create_issue',
       'linear_get_cycle',
       'linear_get_issue',
+      'linear_get_label',
       'linear_get_project',
       'linear_get_team',
+      'linear_get_user',
       'linear_list_cycles',
       'linear_list_issue_comments',
       'linear_list_issues',
+      'linear_list_labels',
       'linear_list_projects',
       'linear_list_teams',
+      'linear_list_users',
       'linear_search_issues',
       'linear_update_issue',
     ])
@@ -60,6 +87,10 @@ describe('tool definitions', () => {
       items: [],
     })
     expect(await map.linear_get_issue.execute({ id: 'ABC-1' }, exec())).toMatchObject({ authenticated: false, found: false })
+    expect(await map.linear_list_labels.execute({}, exec())).toMatchObject({ authenticated: false, found: false, items: [] })
+    expect(await map.linear_get_label.execute({ id: 'label-1' }, exec())).toMatchObject({ authenticated: false, found: false })
+    expect(await map.linear_list_users.execute({}, exec())).toMatchObject({ authenticated: false, found: false, items: [] })
+    expect(await map.linear_get_user.execute({ id: 'user-1' }, exec())).toMatchObject({ authenticated: false, found: false })
     expect(await map.linear_create_issue.execute({ teamId: 'team-1', title: 'x' }, exec())).toMatchObject({ created: false })
     expect(await map.linear_update_issue.execute({ id: 'issue-1', title: 'x' }, exec())).toMatchObject({ ok: false })
     expect(await map.linear_add_issue_comment.execute({ id: 'issue-1', body: 'x' }, exec())).toMatchObject({ ok: false })
@@ -73,6 +104,22 @@ describe('tool definitions', () => {
     expect(result).toMatchObject({ authenticated: true, found: true, items: [{ identifier: 'ABC-1' }] })
     const body = JSON.parse(String((fetchImpl.mock.calls[0] as [string, RequestInit])[1]?.body))
     expect(body.variables).toEqual({ term: 'checkout', teamId: 'team-1', first: 100 })
+  })
+
+  it('label and user tools execute with an API key', async () => {
+    const labelFetch = vi.fn(async () => jsonGraphql({ data: { team: { labels: { nodes: [labelNode] } } } }))
+    const labelClient = new LinearClient({ apiKey: 't', fetchImpl: labelFetch })
+    const labelResult = await tools(labelClient).linear_list_labels.execute({ teamId: 'team-1', limit: 5 }, exec())
+    expect(labelResult).toMatchObject({ authenticated: true, found: true, items: [{ id: 'label-1', name: 'bug', teamKey: 'ABC' }] })
+    const labelBody = JSON.parse(String((labelFetch.mock.calls[0] as [string, RequestInit])[1]?.body))
+    expect(labelBody.variables).toEqual({ teamId: 'team-1', first: 5 })
+
+    const userFetch = vi.fn(async () => jsonGraphql({ data: { users: { nodes: [userNode] } } }))
+    const userClient = new LinearClient({ apiKey: 't', fetchImpl: userFetch })
+    const userResult = await tools(userClient).linear_list_users.execute({ query: 'alice', limit: 10 }, exec())
+    expect(userResult).toMatchObject({ authenticated: true, found: true, items: [{ id: 'user-1', email: 'alice@example.com' }] })
+    const userBody = JSON.parse(String((userFetch.mock.calls[0] as [string, RequestInit])[1]?.body))
+    expect(userBody.variables.first).toBe(10)
   })
 
   it('get_issue maps not found to found:false', async () => {

@@ -95,6 +95,32 @@ export interface LinearTeamInfo {
   updatedAt: string
 }
 
+export interface LinearLabelInfo {
+  id: string
+  name: string
+  color: string | null
+  description: string
+  parentId: string | null
+  parentName: string | null
+  teamId: string | null
+  teamKey: string | null
+  teamName: string | null
+  url: string
+}
+
+export interface LinearUserInfo {
+  id: string
+  name: string
+  displayName: string
+  email: string
+  avatarUrl: string | null
+  active: boolean
+  timezone: string | null
+  createdAt: string
+  updatedAt: string
+  url: string
+}
+
 export class LinearError extends Error {
   constructor(
     message: string,
@@ -166,6 +192,29 @@ const TEAM_FIELDS = `
   color
   issueCount
   updatedAt
+`
+
+const LABEL_FIELDS = `
+  id
+  name
+  color
+  description
+  url
+  parent { id name }
+  team { id key name }
+`
+
+const USER_FIELDS = `
+  id
+  name
+  displayName
+  email
+  avatarUrl
+  active
+  timezone
+  createdAt
+  updatedAt
+  url
 `
 
 interface RawIssue {
@@ -298,6 +347,59 @@ function mapTeam(raw: {
     color: raw.color,
     issueCount: raw.issueCount ?? 0,
     updatedAt: raw.updatedAt,
+  }
+}
+
+interface RawIssueLabel {
+  id: string
+  name: string
+  color: string | null
+  description: string | null
+  url: string
+  parent: { id: string; name: string } | null
+  team: { id: string; key: string; name: string } | null
+}
+
+interface RawUser {
+  id: string
+  name: string
+  displayName: string
+  email: string
+  avatarUrl: string | null
+  active: boolean
+  timezone: string | null
+  createdAt: string
+  updatedAt: string
+  url: string
+}
+
+function mapLabel(raw: RawIssueLabel): LinearLabelInfo {
+  return {
+    id: raw.id,
+    name: raw.name,
+    color: raw.color,
+    description: raw.description ?? '',
+    parentId: raw.parent?.id ?? null,
+    parentName: raw.parent?.name ?? null,
+    teamId: raw.team?.id ?? null,
+    teamKey: raw.team?.key ?? null,
+    teamName: raw.team?.name ?? null,
+    url: raw.url,
+  }
+}
+
+function mapUser(raw: RawUser): LinearUserInfo {
+  return {
+    id: raw.id,
+    name: raw.name,
+    displayName: raw.displayName,
+    email: raw.email,
+    avatarUrl: raw.avatarUrl,
+    active: raw.active,
+    timezone: raw.timezone,
+    createdAt: raw.createdAt,
+    updatedAt: raw.updatedAt,
+    url: raw.url,
   }
 }
 
@@ -827,6 +929,103 @@ export class LinearClient {
     )
     if (!data.team) throw new LinearError('Linear team not found', 404, 'NOT_FOUND')
     return mapTeam(data.team)
+  }
+
+  async listLabels(
+    options: { teamId?: string; limit?: number; signal?: AbortSignal } = {},
+  ): Promise<LinearLabelInfo[]> {
+    if (options.teamId) {
+      const data = await this.request<{ team: { labels: { nodes: RawIssueLabel[] } } | null }>(
+        `
+          query TeamLabels($teamId: String!, $first: Int) {
+            team(id: $teamId) {
+              labels(first: $first) {
+                nodes {
+                  ${LABEL_FIELDS}
+                }
+              }
+            }
+          }
+        `,
+        { teamId: options.teamId, first: clampLimit(options.limit ?? 20) },
+        options.signal,
+      )
+      if (!data.team) throw new LinearError('Linear team not found', 404, 'NOT_FOUND')
+      return (data.team.labels?.nodes ?? []).map(mapLabel)
+    }
+
+    const data = await this.request<{ issueLabels: { nodes: RawIssueLabel[] } }>(
+      `
+        query ListLabels($first: Int) {
+          issueLabels(first: $first) {
+            nodes {
+              ${LABEL_FIELDS}
+            }
+          }
+        }
+      `,
+      { first: clampLimit(options.limit ?? 20) },
+      options.signal,
+    )
+    return (data.issueLabels?.nodes ?? []).map(mapLabel)
+  }
+
+  async getLabel(id: string, signal?: AbortSignal): Promise<LinearLabelInfo> {
+    const data = await this.request<{ issueLabel: RawIssueLabel | null }>(
+      `
+        query GetLabel($id: String!) {
+          issueLabel(id: $id) {
+            ${LABEL_FIELDS}
+          }
+        }
+      `,
+      { id },
+      signal,
+    )
+    if (!data.issueLabel) throw new LinearError('Linear label not found', 404, 'NOT_FOUND')
+    return mapLabel(data.issueLabel)
+  }
+
+  async listUsers(
+    options: { query?: string; limit?: number; signal?: AbortSignal } = {},
+  ): Promise<LinearUserInfo[]> {
+    const data = await this.request<{ users: { nodes: RawUser[] } }>(
+      `
+        query ListUsers($first: Int) {
+          users(first: $first) {
+            nodes {
+              ${USER_FIELDS}
+            }
+          }
+        }
+      `,
+      { first: clampLimit(options.limit ?? 20) },
+      options.signal,
+    )
+    const query = options.query?.trim().toLowerCase()
+    const users = (data.users?.nodes ?? []).map(mapUser)
+    if (!query) return users
+    return users.filter(user =>
+      user.name.toLowerCase().includes(query) ||
+      user.displayName.toLowerCase().includes(query) ||
+      user.email.toLowerCase().includes(query),
+    )
+  }
+
+  async getUser(id: string, signal?: AbortSignal): Promise<LinearUserInfo> {
+    const data = await this.request<{ user: RawUser | null }>(
+      `
+        query GetUser($id: String!) {
+          user(id: $id) {
+            ${USER_FIELDS}
+          }
+        }
+      `,
+      { id },
+      signal,
+    )
+    if (!data.user) throw new LinearError('Linear user not found', 404, 'NOT_FOUND')
+    return mapUser(data.user)
   }
 }
 

@@ -2,7 +2,7 @@
 
 [English](README.md) | 中文
 
-为 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）提供 Linear Issue 管理能力的 Cordis 工具插件。Agent 可以通过自然语言搜索和筛选工单、查看工单详情、创建和更新工单、添加和查看评论，并读取团队、项目和 Cycle 信息。
+为 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）提供 Linear Issue 管理能力的 Cordis 工具插件。Agent 可以通过自然语言搜索和筛选工单、查看工单详情、创建和更新工单、添加和查看评论，并读取团队、项目、Cycle、标签和用户信息。
 
 插件遵循官方「一切皆插件」架构，通过 `ctx.tools.register(defineTool(...))` 注册模型可见工具，并符合 [adding-a-tool](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/cookbook/adding-a-tool.md) 契约。
 
@@ -58,11 +58,15 @@ npm install /path/to/dsh-tool-linear
 | `linear_get_project` | 查看项目详情、日期、进度、健康状态和团队 | 是 |
 | `linear_list_teams` | 列出 API Key 可见的团队 | 是 |
 | `linear_get_team` | 查看团队详情 | 是 |
+| `linear_list_labels` | 查看标签列表，可按团队筛选 | 是 |
+| `linear_get_label` | 查看标签详情 | 是 |
+| `linear_list_users` | 查看用户列表，可按姓名、显示名或邮箱筛选 | 是 |
+| `linear_get_user` | 查看用户详情 | 是 |
 
 ### 行为约定
 
 - 未配置凭据时返回明确业务值：读工具返回 `{ authenticated: false, ... }`，写工具返回 `{ created: false, reason }` 或 `{ ok: false, reason }`。
-- 工单、Cycle、项目或团队不存在映射为 `{ found: false }`。
+- 工单、Cycle、项目、团队、标签或用户不存在映射为 `{ found: false }`。
 - 写操作的 GraphQL 校验和用户错误映射为 `{ created: false, reason }` 或 `{ ok: false, reason }`。
 - 凭据无效（401）、访问禁止（403）、限流（429）、服务器错误（5xx）等基础设施错误直接抛出 `LinearError`。
 - 每个请求都透传 `exec.signal`，并使用可配置超时（默认 15 秒）。

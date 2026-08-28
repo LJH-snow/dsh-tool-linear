@@ -6,7 +6,7 @@
 |---|---|
 | 项目名 | `dsh-tool-linear` |
 | 定位 | DeepSeek Harness 的独立 Linear 工具插件 |
-| 版本 | v0.1.0 |
+| 版本 | v0.2.0 |
 | 架构 | Cordis 插件 + `ctx.tools.register(defineTool(...))` |
 | API | Linear GraphQL API |
 | 认证 | Linear 个人 API Key，直接放在 `Authorization` 请求头 |
@@ -15,7 +15,7 @@
 
 ```text
 src/client.ts      Linear GraphQL 客户端：fetch 注入、超时、认证、错误映射
-src/index.ts       13 个 defineTool 定义与插件 apply
+src/index.ts       17 个 defineTool 定义与插件 apply
 tests/client.spec.ts  客户端契约测试
 tests/tools.spec.ts   工具注册、认证保护、业务失败值、UI 呈现测试
 examples/cordis.yml   dsh 组合配置示例
@@ -26,7 +26,7 @@ examples/cordis.yml   dsh 组合配置示例
 
 ### 2.1 范围控制
 
-第一版定位为「Linear Issue 管理最小闭环」：搜索、列表、读详情、创建、更新、评论，以及团队、项目、Cycle 元信息，共 13 个工具。后续版本再扩展用户、标签、Initiatives、Milestone、附件和分页游标，避免插件一开始就膨胀。
+v0.1 定位为「Linear Issue 管理最小闭环」：搜索、列表、读详情、创建、更新、评论，以及团队、项目、Cycle 元信息，共 13 个工具。v0.2 补上标签和用户元信息，共 17 个工具。后续版本再扩展 Initiatives、Milestone、附件和分页游标，避免插件一开始就膨胀。
 
 ### 2.2 认证与安全
 
@@ -44,6 +44,8 @@ examples/cordis.yml   dsh 组合配置示例
 - 创建、更新、评论分别使用 `issueCreate`、`issueUpdate`、`commentCreate` mutation。
 - 所有连接查询的 `limit` 都会钳制在 1-100，默认 20。
 - 每个请求使用 `AbortSignal.timeout` 与 `exec.signal` 合并，默认 15 秒超时。
+- 标签列表支持 workspace 全局查询，也可按 `teamId` 缩小到指定团队；标签详情使用 `issueLabel(id)`。
+- 用户列表使用 `users(first)` 获取当前 API Key 可见用户，`query` 匹配姓名、显示名或邮箱；用户详情使用 `user(id)`。
 
 ### 2.4 错误映射
 
@@ -51,7 +53,7 @@ examples/cordis.yml   dsh 组合配置示例
 |---|---|
 | 未配置凭据（读） | `{ authenticated: false, ... }` |
 | 未配置凭据（写） | `{ created: false, reason }` 或 `{ ok: false, reason }` |
-| Issue/Cycle/Project/Team 不存在 | `{ found: false }` |
+| Issue/Cycle/Project/Team/Label/User 不存在 | `{ found: false }` |
 | 写操作 GraphQL 校验失败 | `{ created: false, reason }` 或 `{ ok: false, reason }` |
 | 401/403/429/5xx | 抛 `LinearError` |
 
@@ -70,13 +72,11 @@ npm run build
 - 工单搜索、列表筛选、详情回退查询。
 - 创建、更新、评论 mutation 的请求体与业务失败映射。
 - 评论、Cycle、Project、Team 结果映射。
-- 13 个工具注册、无凭据保护、执行结果、render 纯函数与 present 卡片。
+- 17 个工具注册、无凭据保护、执行结果、render 纯函数与 present 卡片。
 
 ## 4. 后续方向
 
-- `linear_list_labels` / `linear_get_label`：标签选择和解析。
-- `linear_search_users` / `linear_get_user`：经办人和订阅者。
 - `linear_list_initiatives` / `linear_list_project_milestones`：更完整的规划信息。
-- 分页游标与无限列表：当前 v0.1 使用 `first` 钳制，后续可暴露 `after` 游标。
+- 分页游标与无限列表：当前版本使用 `first` 钳制，后续可暴露 `after` 游标。
 
 开发新能力时保持同一个客户端的错误映射和字段映射约定，避免模型看到的返回结构分裂。

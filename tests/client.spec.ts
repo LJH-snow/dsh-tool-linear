@@ -24,6 +24,29 @@ const issueNode = {
   labels: { nodes: [{ id: 'label-1', name: 'bug' }] },
 }
 
+const labelNode = {
+  id: 'label-1',
+  name: 'bug',
+  color: '#ff0000',
+  description: 'Something is broken',
+  url: 'https://linear.app/acme/label/label-1',
+  parent: null,
+  team: { id: 'team-1', key: 'ABC', name: 'Acme' },
+}
+
+const userNode = {
+  id: 'user-1',
+  name: 'Alice Smith',
+  displayName: 'Alice',
+  email: 'alice@example.com',
+  avatarUrl: null,
+  active: true,
+  timezone: 'Asia/Shanghai',
+  createdAt: '2026-08-01T00:00:00Z',
+  updatedAt: '2026-08-02T00:00:00Z',
+  url: 'https://linear.app/acme/user/user-1',
+}
+
 describe('LinearClient', () => {
   it('posts GraphQL with the API key and maps search results', async () => {
     const fetchImpl = vi.fn(async () => jsonGraphql({ data: { searchIssues: { nodes: [issueNode] } } }))
@@ -229,6 +252,71 @@ describe('LinearClient', () => {
     }))
     const teams = new LinearClient({ apiKey: 't', fetchImpl: teamFetch })
     expect(await teams.getTeam('team-1')).toMatchObject({ key: 'ABC', issueCount: 42 })
+  })
+
+  it('lists team labels and workspace labels', async () => {
+    const teamFetch = vi.fn(async () => jsonGraphql({ data: { team: { labels: { nodes: [labelNode] } } } }))
+    const teamClient = new LinearClient({ apiKey: 't', fetchImpl: teamFetch })
+    expect(await teamClient.listLabels({ teamId: 'team-1', limit: 50 })).toMatchObject([
+      { id: 'label-1', name: 'bug', teamKey: 'ABC' },
+    ])
+    const teamBody = JSON.parse(String((teamFetch.mock.calls[0] as [string, RequestInit])[1]?.body))
+    expect(teamBody.variables).toEqual({ teamId: 'team-1', first: 50 })
+    expect(teamBody.query).toContain('team(id: $teamId)')
+
+    const workspaceFetch = vi.fn(async () => jsonGraphql({ data: { issueLabels: { nodes: [labelNode] } } }))
+    const workspaceClient = new LinearClient({ apiKey: 't', fetchImpl: workspaceFetch })
+    expect(await workspaceClient.listLabels()).toMatchObject([{ id: 'label-1', name: 'bug' }])
+    const workspaceBody = JSON.parse(String((workspaceFetch.mock.calls[0] as [string, RequestInit])[1]?.body))
+    expect(workspaceBody.query).toContain('issueLabels')
+  })
+
+  it('getLabel maps details and throws 404 when missing', async () => {
+    const fetchImpl = vi.fn(async () => jsonGraphql({ data: { issueLabel: labelNode } }))
+    const client = new LinearClient({ apiKey: 't', fetchImpl })
+    expect(await client.getLabel('label-1')).toMatchObject({
+      id: 'label-1',
+      name: 'bug',
+      teamKey: 'ABC',
+    })
+    expect(String((fetchImpl.mock.calls[0] as [string, RequestInit])[1]?.body)).toContain('issueLabel(id: $id)')
+
+    const missing = new LinearClient({ apiKey: 't', fetchImpl: vi.fn(async () => jsonGraphql({ data: { issueLabel: null } })) })
+    await expect(missing.getLabel('missing-label')).rejects.toMatchObject({ status: 404 })
+  })
+
+  it('listUsers filters by name, display name, or email', async () => {
+    const bobNode = {
+      ...userNode,
+      id: 'user-2',
+      name: 'Bob Brown',
+      displayName: 'Support Bot',
+      email: 'bob@example.com',
+    }
+    const fetchImpl = vi.fn(async () => jsonGraphql({ data: { users: { nodes: [userNode, bobNode] } } }))
+    const client = new LinearClient({ apiKey: 't', fetchImpl })
+
+    expect(await client.listUsers({ query: 'alice' })).toMatchObject([{ id: 'user-1', email: 'alice@example.com' }])
+    expect(await client.listUsers({ query: 'support' })).toMatchObject([{ id: 'user-2', email: 'bob@example.com' }])
+    expect(await client.listUsers({ query: 'bob@example.com' })).toMatchObject([{ id: 'user-2' }])
+
+    const body = JSON.parse(String((fetchImpl.mock.calls[0] as [string, RequestInit])[1]?.body))
+    expect(body.variables.first).toBe(20)
+    expect(body.query).toContain('users(first: $first)')
+  })
+
+  it('getUser maps details and throws 404 when missing', async () => {
+    const fetchImpl = vi.fn(async () => jsonGraphql({ data: { user: userNode } }))
+    const client = new LinearClient({ apiKey: 't', fetchImpl })
+    expect(await client.getUser('user-1')).toMatchObject({
+      id: 'user-1',
+      displayName: 'Alice',
+      active: true,
+    })
+    expect(String((fetchImpl.mock.calls[0] as [string, RequestInit])[1]?.body)).toContain('user(id: $id)')
+
+    const missing = new LinearClient({ apiKey: 't', fetchImpl: vi.fn(async () => jsonGraphql({ data: { user: null } })) })
+    await expect(missing.getUser('missing-user')).rejects.toMatchObject({ status: 404 })
   })
 
   it('strips a trailing slash from a baseUrl override and checks hasToken', async () => {
