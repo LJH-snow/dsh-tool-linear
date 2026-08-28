@@ -47,6 +47,13 @@ const userNode = {
   url: 'https://linear.app/acme/user/user-1',
 }
 
+const workflowStateNode = {
+  id: 'state-1',
+  name: 'In Progress',
+  type: 'started',
+  position: 2,
+}
+
 describe('LinearClient', () => {
   it('posts GraphQL with the API key and maps search results', async () => {
     const fetchImpl = vi.fn(async () => jsonGraphql({ data: { searchIssues: { nodes: [issueNode] } } }))
@@ -317,6 +324,17 @@ describe('LinearClient', () => {
 
     const missing = new LinearClient({ apiKey: 't', fetchImpl: vi.fn(async () => jsonGraphql({ data: { user: null } })) })
     await expect(missing.getUser('missing-user')).rejects.toMatchObject({ status: 404 })
+  })
+
+  it('listWorkflowStates maps team states and clamps the limit', async () => {
+    const fetchImpl = vi.fn(async () => jsonGraphql({ data: { team: { states: { nodes: [workflowStateNode] } } } }))
+    const client = new LinearClient({ apiKey: 't', fetchImpl })
+    expect(await client.listWorkflowStates('team-1', { limit: 500 })).toMatchObject([
+      { id: 'state-1', name: 'In Progress', type: 'started', position: 2 },
+    ])
+    const body = JSON.parse(String((fetchImpl.mock.calls[0] as [string, RequestInit])[1]?.body))
+    expect(body.variables).toEqual({ teamId: 'team-1', first: 100 })
+    expect(body.query).toContain('states(first: $first)')
   })
 
   it('strips a trailing slash from a baseUrl override and checks hasToken', async () => {

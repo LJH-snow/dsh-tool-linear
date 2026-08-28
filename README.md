@@ -2,7 +2,7 @@
 
 [English](README.md) | [中文](README.zh.md)
 
-A Cordis tool plugin that gives [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`) Linear issue management capabilities. Agents can search and list issues, read issue details, create and update tickets, add and list comments, and inspect teams, projects, cycles, labels, and users.
+A Cordis tool plugin that gives [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`) Linear issue management capabilities. Agents can search and list issues, read issue details, create and update tickets, add and list comments, and inspect teams, projects, cycles, labels, users, and workflow states.
 
 It follows the official "everything is a plugin" architecture with `ctx.tools.register(defineTool(...))` and the [adding-a-tool](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/cookbook/adding-a-tool.md) contract.
 
@@ -58,6 +58,7 @@ Full example: [examples/cordis.yml](examples/cordis.yml).
 | `linear_get_project` | Get project details, dates, progress, health, and teams | yes |
 | `linear_list_teams` | List teams visible to the API key | yes |
 | `linear_get_team` | Get team details | yes |
+| `linear_list_workflow_states` | List workflow states for a team, useful when choosing issue states | yes |
 | `linear_list_labels` | List labels, optionally scoped to a team | yes |
 | `linear_get_label` | Get label details | yes |
 | `linear_list_users` | List users, optionally filtered by name, display name, or email | yes |

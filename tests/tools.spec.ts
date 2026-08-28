@@ -57,6 +57,13 @@ const userNode = {
   url: 'https://linear.app/acme/user/user-1',
 }
 
+const workflowStateNode = {
+  id: 'state-1',
+  name: 'In Progress',
+  type: 'started',
+  position: 2,
+}
+
 describe('tool definitions', () => {
   it('registers the planned Linear tool set', () => {
     expect(Object.keys(tools()).sort()).toEqual([
@@ -75,6 +82,7 @@ describe('tool definitions', () => {
       'linear_list_projects',
       'linear_list_teams',
       'linear_list_users',
+      'linear_list_workflow_states',
       'linear_search_issues',
       'linear_update_issue',
     ])
@@ -91,6 +99,7 @@ describe('tool definitions', () => {
     expect(await map.linear_get_label.execute({ id: 'label-1' }, exec())).toMatchObject({ authenticated: false, found: false })
     expect(await map.linear_list_users.execute({}, exec())).toMatchObject({ authenticated: false, found: false, items: [] })
     expect(await map.linear_get_user.execute({ id: 'user-1' }, exec())).toMatchObject({ authenticated: false, found: false })
+    expect(await map.linear_list_workflow_states.execute({ teamId: 'team-1' }, exec())).toMatchObject({ authenticated: false, found: false, items: [] })
     expect(await map.linear_create_issue.execute({ teamId: 'team-1', title: 'x' }, exec())).toMatchObject({ created: false })
     expect(await map.linear_update_issue.execute({ id: 'issue-1', title: 'x' }, exec())).toMatchObject({ ok: false })
     expect(await map.linear_add_issue_comment.execute({ id: 'issue-1', body: 'x' }, exec())).toMatchObject({ ok: false })
@@ -120,6 +129,13 @@ describe('tool definitions', () => {
     expect(userResult).toMatchObject({ authenticated: true, found: true, items: [{ id: 'user-1', email: 'alice@example.com' }] })
     const userBody = JSON.parse(String((userFetch.mock.calls[0] as [string, RequestInit])[1]?.body))
     expect(userBody.variables.first).toBe(10)
+
+    const stateFetch = vi.fn(async () => jsonGraphql({ data: { team: { states: { nodes: [workflowStateNode] } } } }))
+    const stateClient = new LinearClient({ apiKey: 't', fetchImpl: stateFetch })
+    const stateResult = await tools(stateClient).linear_list_workflow_states.execute({ teamId: 'team-1' }, exec())
+    expect(stateResult).toMatchObject({ authenticated: true, found: true, items: [{ id: 'state-1', type: 'started' }] })
+    const stateBody = JSON.parse(String((stateFetch.mock.calls[0] as [string, RequestInit])[1]?.body))
+    expect(stateBody.variables).toEqual({ teamId: 'team-1', first: 20 })
   })
 
   it('get_issue maps not found to found:false', async () => {

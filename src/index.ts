@@ -1070,6 +1070,65 @@ export function createTools(client: LinearClient) {
         }
       },
     }),
+
+    defineTool({
+      name: 'linear_list_workflow_states',
+      description: 'List Linear workflow states for a team, useful when choosing a state for create or update.',
+      parameters: {
+        teamId: { type: 'string', required: true, description: 'Linear team UUID, from linear_list_teams' },
+        limit: { type: 'integer', description: 'Maximum states, 1-100 (default 20)' },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            authenticated: { type: 'boolean' },
+            found: { type: 'boolean' },
+            reason: { type: 'string' },
+            items: {
+              type: 'array',
+              items: {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                  id: { type: 'string' },
+                  name: { type: 'string' },
+                  type: { type: 'string' },
+                  position: { type: 'number' },
+                },
+              },
+            },
+          },
+        },
+        render: (_args, value) => {
+          if (!value.authenticated) return [{ type: 'text', text: 'Listing Linear workflow states requires an API key.' }]
+          if (!value.found) return [{ type: 'text', text: value.reason ?? 'Linear workflow states are not accessible.' }]
+          return renderWorkflowStateList(value.items ?? [])
+        },
+      },
+      presentCall(args): ToolCallView {
+        return { card: 'generic', title: `Workflow states for ${args.teamId}`, kind: 'search' }
+      },
+      presentResult(_args, result): ToolResultView | undefined {
+        const v = result as unknown as { authenticated?: boolean; found?: boolean; items?: unknown[] }
+        if (!v.authenticated) return { card: 'generic', title: 'Requires Linear API key' }
+        if (!v.found) return { card: 'generic', title: 'Team not found' }
+        return { card: 'generic', title: `${(v.items ?? []).length} state(s)` }
+      },
+      async execute(args, exec) {
+        if (!client.hasToken()) return { authenticated: false, found: false, items: [], reason: 'Listing Linear workflow states requires a Linear API key.' }
+        try {
+          const items = await client.listWorkflowStates(args.teamId as string, { limit: clampLimit(args.limit), signal: exec.signal })
+          return { authenticated: true, found: true, items }
+        } catch (error) {
+          if (error instanceof LinearError && (error.status === 404 || /not found/i.test(error.message))) {
+            return { authenticated: true, found: false, items: [], reason: 'Linear team not found.' }
+          }
+          throw error
+        }
+      },
+    }),
   ]
 }
 
@@ -1112,6 +1171,13 @@ function renderUserList(items: Array<{ displayName?: string; name?: string; emai
   if (items.length === 0) return [{ type: 'text' as const, text: 'No Linear users found.' }]
   return [{ type: 'text' as const, text: items.map(item =>
     `${item.displayName ?? item.name ?? 'unknown'} (${item.email ?? ''}, ${item.active ? 'active' : 'inactive'})`,
+  ).join('\n') }]
+}
+
+function renderWorkflowStateList(items: Array<{ name?: string; type?: string; position?: number }>) {
+  if (items.length === 0) return [{ type: 'text' as const, text: 'No Linear workflow states found.' }]
+  return [{ type: 'text' as const, text: items.map(item =>
+    `${item.position ?? 0}: ${item.name ?? ''} [${item.type ?? ''}]`,
   ).join('\n') }]
 }
 

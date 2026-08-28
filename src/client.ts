@@ -121,6 +121,13 @@ export interface LinearUserInfo {
   url: string
 }
 
+export interface LinearWorkflowStateInfo {
+  id: string
+  name: string
+  type: string
+  position: number
+}
+
 export class LinearError extends Error {
   constructor(
     message: string,
@@ -215,6 +222,13 @@ const USER_FIELDS = `
   createdAt
   updatedAt
   url
+`
+
+const WORKFLOW_STATE_FIELDS = `
+  id
+  name
+  type
+  position
 `
 
 interface RawIssue {
@@ -400,6 +414,20 @@ function mapUser(raw: RawUser): LinearUserInfo {
     createdAt: raw.createdAt,
     updatedAt: raw.updatedAt,
     url: raw.url,
+  }
+}
+
+function mapWorkflowState(raw: {
+  id: string
+  name: string
+  type: string
+  position: number | null
+}): LinearWorkflowStateInfo {
+  return {
+    id: raw.id,
+    name: raw.name,
+    type: raw.type,
+    position: raw.position ?? 0,
   }
 }
 
@@ -1026,6 +1054,34 @@ export class LinearClient {
     )
     if (!data.user) throw new LinearError('Linear user not found', 404, 'NOT_FOUND')
     return mapUser(data.user)
+  }
+
+  async listWorkflowStates(
+    teamId: string,
+    options: { limit?: number; signal?: AbortSignal } = {},
+  ): Promise<LinearWorkflowStateInfo[]> {
+    const data = await this.request<{ team: { states: { nodes: Array<{
+      id: string
+      name: string
+      type: string
+      position: number | null
+    }> } } | null }>(
+      `
+        query TeamWorkflowStates($teamId: String!, $first: Int) {
+          team(id: $teamId) {
+            states(first: $first) {
+              nodes {
+                ${WORKFLOW_STATE_FIELDS}
+              }
+            }
+          }
+        }
+      `,
+      { teamId, first: clampLimit(options.limit ?? 20) },
+      options.signal,
+    )
+    if (!data.team) throw new LinearError('Linear team not found', 404, 'NOT_FOUND')
+    return (data.team.states?.nodes ?? []).map(mapWorkflowState)
   }
 }
 
