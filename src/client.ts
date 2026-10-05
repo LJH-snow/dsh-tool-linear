@@ -1,5 +1,7 @@
 /** Minimal Linear GraphQL client with injected fetch for testability. */
 
+import { assertSafeUrl, EndpointSecurityError, normalizeBaseUrl, type LookupImpl } from './url-security.js'
+
 export interface LinearClientOptions {
   /** Linear personal API key. */
   apiKey?: string
@@ -8,6 +10,8 @@ export interface LinearClientOptions {
   fetchImpl?: typeof fetch
   /** Request timeout in milliseconds. 0 disables the timeout. */
   timeoutMs?: number
+  /** Test-only DNS lookup override; production uses node:dns/promises. */
+  lookupImpl?: LookupImpl
 }
 
 export interface LinearIssueSummary {
@@ -447,12 +451,19 @@ export class LinearClient {
   private readonly baseUrl: string
   private readonly fetchImpl: typeof fetch
   private readonly timeoutMs: number
+  private readonly lookupImpl: LookupImpl | undefined
 
   constructor(options: LinearClientOptions = {}) {
     this.apiKey = options.apiKey ?? ''
-    this.baseUrl = (options.baseUrl ?? 'https://api.linear.app/graphql').replace(/\/+$/, '')
+    try {
+      this.baseUrl = normalizeBaseUrl(options.baseUrl, 'https://api.linear.app/graphql')
+    } catch (error) {
+      if (error instanceof EndpointSecurityError) throw new LinearError(error.message, 400)
+      throw error
+    }
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch
     this.timeoutMs = options.timeoutMs ?? 15_000
+    this.lookupImpl = options.lookupImpl
   }
 
   hasToken(): boolean {
@@ -476,6 +487,12 @@ export class LinearClient {
   }
 
   private async request<T>(query: string, variables: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
+    try {
+      await assertSafeUrl(new URL(this.baseUrl), this.lookupImpl)
+    } catch (error) {
+      if (error instanceof EndpointSecurityError) throw new LinearError(error.message, 400)
+      throw error
+    }
     const response = await this.fetchImpl(this.baseUrl, {
       method: 'POST',
       headers: this.headers(),

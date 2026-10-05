@@ -3,6 +3,10 @@ import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
 import { LinearClient } from '../src/client.ts'
 import { createTools } from '../src/index.ts'
 
+/** Deterministic DNS so tests never depend on real resolution. */
+const publicLookup = async () => [{ address: '93.184.216.34', family: 4 as const }]
+
+
 function jsonGraphql(body: unknown): Response {
   return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } })
 }
@@ -11,7 +15,7 @@ function exec(): ToolRunContext {
   return { signal: new AbortController().signal } as unknown as ToolRunContext
 }
 
-function tools(client = new LinearClient({ fetchImpl: globalThis.fetch })) {
+function tools(client = new LinearClient({ lookupImpl: publicLookup, fetchImpl: globalThis.fetch })) {
   return Object.fromEntries(createTools(client).map(tool => [tool.name, tool]))
 }
 
@@ -107,7 +111,7 @@ describe('tool definitions', () => {
 
   it('search_issues executes with an API key and forwards variables', async () => {
     const fetchImpl = vi.fn(async () => jsonGraphql({ data: { searchIssues: { nodes: [issueNode] } } }))
-    const client = new LinearClient({ apiKey: 'lin_api_test', fetchImpl })
+    const client = new LinearClient({ lookupImpl: publicLookup, apiKey: 'lin_api_test', fetchImpl })
     const map = tools(client)
     const result = await map.linear_search_issues.execute({ query: 'checkout', teamId: 'team-1', limit: 500 }, exec())
     expect(result).toMatchObject({ authenticated: true, found: true, items: [{ identifier: 'ABC-1' }] })
@@ -117,21 +121,21 @@ describe('tool definitions', () => {
 
   it('label and user tools execute with an API key', async () => {
     const labelFetch = vi.fn(async () => jsonGraphql({ data: { team: { labels: { nodes: [labelNode] } } } }))
-    const labelClient = new LinearClient({ apiKey: 't', fetchImpl: labelFetch })
+    const labelClient = new LinearClient({ lookupImpl: publicLookup, apiKey: 't', fetchImpl: labelFetch })
     const labelResult = await tools(labelClient).linear_list_labels.execute({ teamId: 'team-1', limit: 5 }, exec())
     expect(labelResult).toMatchObject({ authenticated: true, found: true, items: [{ id: 'label-1', name: 'bug', teamKey: 'ABC' }] })
     const labelBody = JSON.parse(String((labelFetch.mock.calls[0] as [string, RequestInit])[1]?.body))
     expect(labelBody.variables).toEqual({ teamId: 'team-1', first: 5 })
 
     const userFetch = vi.fn(async () => jsonGraphql({ data: { users: { nodes: [userNode] } } }))
-    const userClient = new LinearClient({ apiKey: 't', fetchImpl: userFetch })
+    const userClient = new LinearClient({ lookupImpl: publicLookup, apiKey: 't', fetchImpl: userFetch })
     const userResult = await tools(userClient).linear_list_users.execute({ query: 'alice', limit: 10 }, exec())
     expect(userResult).toMatchObject({ authenticated: true, found: true, items: [{ id: 'user-1', email: 'alice@example.com' }] })
     const userBody = JSON.parse(String((userFetch.mock.calls[0] as [string, RequestInit])[1]?.body))
     expect(userBody.variables.first).toBe(10)
 
     const stateFetch = vi.fn(async () => jsonGraphql({ data: { team: { states: { nodes: [workflowStateNode] } } } }))
-    const stateClient = new LinearClient({ apiKey: 't', fetchImpl: stateFetch })
+    const stateClient = new LinearClient({ lookupImpl: publicLookup, apiKey: 't', fetchImpl: stateFetch })
     const stateResult = await tools(stateClient).linear_list_workflow_states.execute({ teamId: 'team-1' }, exec())
     expect(stateResult).toMatchObject({ authenticated: true, found: true, items: [{ id: 'state-1', type: 'started' }] })
     const stateBody = JSON.parse(String((stateFetch.mock.calls[0] as [string, RequestInit])[1]?.body))
@@ -139,13 +143,13 @@ describe('tool definitions', () => {
   })
 
   it('get_issue maps not found to found:false', async () => {
-    const client = new LinearClient({ apiKey: 't', fetchImpl: vi.fn(async () => jsonGraphql({ data: { issue: null } })) })
+    const client = new LinearClient({ lookupImpl: publicLookup, apiKey: 't', fetchImpl: vi.fn(async () => jsonGraphql({ data: { issue: null } })) })
     const map = tools(client)
     expect(await map.linear_get_issue.execute({ id: 'missing-issue' }, exec())).toEqual({ authenticated: true, found: false })
   })
 
   it('create_issue maps GraphQL validation errors to created:false', async () => {
-    const client = new LinearClient({ apiKey: 't', fetchImpl: vi.fn(async () => jsonGraphql({
+    const client = new LinearClient({ lookupImpl: publicLookup, apiKey: 't', fetchImpl: vi.fn(async () => jsonGraphql({
       errors: [{ message: 'Team not found', extensions: { code: 'BAD_USER_INPUT' } }],
     })) })
     const map = tools(client)
@@ -154,7 +158,7 @@ describe('tool definitions', () => {
   })
 
   it('update_issue requires at least one field', async () => {
-    const client = new LinearClient({ apiKey: 't', fetchImpl: vi.fn() })
+    const client = new LinearClient({ lookupImpl: publicLookup, apiKey: 't', fetchImpl: vi.fn() })
     const map = tools(client)
     const result = await map.linear_update_issue.execute({ id: 'issue-1' }, exec())
     expect(result).toMatchObject({ ok: false })

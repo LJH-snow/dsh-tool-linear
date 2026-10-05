@@ -41,6 +41,8 @@ Full example: [examples/cordis.yml](examples/cordis.yml).
 
 > Security: the first version requires an API key for every tool because Linear workspaces are access-controlled and several tools modify tickets. Create a personal API key under Linear Settings > Security & access, grant it the minimum permissions needed, and never commit it.
 
+The `baseUrl` override must be an absolute `http://` or `https://` root URL. Only publicly reachable hosts are allowed: localhost, loopback, private, link-local, CGNAT, multicast, reserved/documentation/benchmark ranges, and every IANA special-purpose block are rejected, and a hostname whose DNS results contain any such address fails closed before the request is sent. Credentials, query strings, fragments, and non-root paths are not allowed.
+
 ## Tools
 
 | Tool | Description | Credentials |

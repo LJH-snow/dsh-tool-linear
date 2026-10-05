@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
 import { LinearClient, LinearError } from '../src/client.ts'
 
+/** Deterministic DNS so tests never depend on real resolution. */
+const publicLookup = async () => [{ address: '93.184.216.34', family: 4 as const }]
+
+
 function jsonGraphql(body: unknown): Response {
   return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } })
 }
@@ -57,7 +61,7 @@ const workflowStateNode = {
 describe('LinearClient', () => {
   it('posts GraphQL with the API key and maps search results', async () => {
     const fetchImpl = vi.fn(async () => jsonGraphql({ data: { searchIssues: { nodes: [issueNode] } } }))
-    const client = new LinearClient({ apiKey: 'lin_api_test', fetchImpl })
+    const client = new LinearClient({ lookupImpl: publicLookup, apiKey: 'lin_api_test', fetchImpl })
     const items = await client.searchIssues('checkout', { teamId: 'team-1', limit: 10 })
 
     expect(items[0]).toMatchObject({
@@ -81,7 +85,7 @@ describe('LinearClient', () => {
 
   it('listIssues builds an IssueFilter and clamps the limit', async () => {
     const fetchImpl = vi.fn(async () => jsonGraphql({ data: { issues: { nodes: [issueNode] } } }))
-    const client = new LinearClient({ apiKey: 'lin_api_test', fetchImpl })
+    const client = new LinearClient({ lookupImpl: publicLookup, apiKey: 'lin_api_test', fetchImpl })
     await client.listIssues({
       teamId: 'team-1',
       projectId: 'project-1',
@@ -104,7 +108,7 @@ describe('LinearClient', () => {
       .mockResolvedValueOnce(jsonGraphql({ data: { issue: null } }))
       .mockResolvedValueOnce(jsonGraphql({ data: { searchIssues: { nodes: [issueNode] } } }))
       .mockResolvedValueOnce(jsonGraphql({ data: { issue: issueNode } }))
-    const client = new LinearClient({ apiKey: 'lin_api_test', fetchImpl })
+    const client = new LinearClient({ lookupImpl: publicLookup, apiKey: 'lin_api_test', fetchImpl })
     const issue = await client.getIssue('ABC-1')
 
     expect(issue).toMatchObject({ identifier: 'ABC-1', description: 'The button does nothing.' })
@@ -113,7 +117,7 @@ describe('LinearClient', () => {
   })
 
   it('getIssue throws 404 when a UUID is not found', async () => {
-    const client = new LinearClient({ apiKey: 'lin_api_test', fetchImpl: vi.fn(async () => jsonGraphql({ data: { issue: null } })) })
+    const client = new LinearClient({ lookupImpl: publicLookup, apiKey: 'lin_api_test', fetchImpl: vi.fn(async () => jsonGraphql({ data: { issue: null } })) })
     await expect(client.getIssue('7f000001-...')).rejects.toMatchObject({ status: 404 })
   })
 
@@ -121,7 +125,7 @@ describe('LinearClient', () => {
     const fetchImpl = vi.fn(async () => jsonGraphql({
       data: { issueCreate: { success: true, issue: { id: 'issue-2', identifier: 'ABC-2', url: 'https://linear.app/acme/issue/ABC-2' } } },
     }))
-    const client = new LinearClient({ apiKey: 'lin_api_test', fetchImpl })
+    const client = new LinearClient({ lookupImpl: publicLookup, apiKey: 'lin_api_test', fetchImpl })
     const result = await client.createIssue({
       teamId: 'team-1',
       title: 'New bug',
@@ -152,7 +156,7 @@ describe('LinearClient', () => {
   })
 
   it('maps GraphQL user errors to business failures and auth errors to infrastructure errors', async () => {
-    const userError = new LinearClient({ apiKey: 'lin_api_test', fetchImpl: vi.fn(async () => jsonGraphql({
+    const userError = new LinearClient({ lookupImpl: publicLookup, apiKey: 'lin_api_test', fetchImpl: vi.fn(async () => jsonGraphql({
       errors: [{ message: 'Team not found', extensions: { code: 'BAD_USER_INPUT' } }],
     })) })
     expect(await userError.createIssue({ teamId: 'missing', title: 'x' })).toMatchObject({
@@ -160,7 +164,7 @@ describe('LinearClient', () => {
       reason: 'Team not found',
     })
 
-    const authError = new LinearClient({ apiKey: 'bad', fetchImpl: vi.fn(async () => jsonGraphql({
+    const authError = new LinearClient({ lookupImpl: publicLookup, apiKey: 'bad', fetchImpl: vi.fn(async () => jsonGraphql({
       errors: [{ message: 'Authentication required', extensions: { code: 'AUTHENTICATION_ERROR' } }],
     })) })
     await expect(authError.createIssue({ teamId: 'team-1', title: 'x' })).rejects.toThrow(LinearError)
@@ -168,7 +172,7 @@ describe('LinearClient', () => {
 
   it('updateIssue and addIssueComment send the expected mutations', async () => {
     const updateFetch = vi.fn(async () => jsonGraphql({ data: { issueUpdate: { success: true, issue: { id: 'issue-1' } } } }))
-    const client = new LinearClient({ apiKey: 'lin_api_test', fetchImpl: updateFetch })
+    const client = new LinearClient({ lookupImpl: publicLookup, apiKey: 'lin_api_test', fetchImpl: updateFetch })
     const update = await client.updateIssue('issue-1', { title: 'Renamed', stateId: 'state-2' })
     const updateBody = JSON.parse(String((updateFetch.mock.calls[0] as [string, RequestInit])[1]?.body))
     expect(updateBody.variables).toEqual({ id: 'issue-1', input: { title: 'Renamed', stateId: 'state-2' } })
@@ -177,7 +181,7 @@ describe('LinearClient', () => {
     const commentFetch = vi.fn(async () => jsonGraphql({
       data: { commentCreate: { success: true, comment: { id: 'comment-1' } } },
     }))
-    const commentClient = new LinearClient({ apiKey: 'lin_api_test', fetchImpl: commentFetch })
+    const commentClient = new LinearClient({ lookupImpl: publicLookup, apiKey: 'lin_api_test', fetchImpl: commentFetch })
     const comment = await commentClient.addIssueComment('issue-1', 'Looks good')
     const commentBody = JSON.parse(String((commentFetch.mock.calls[0] as [string, RequestInit])[1]?.body))
     expect(commentBody.variables.input).toEqual({ issueId: 'issue-1', body: 'Looks good' })
@@ -195,7 +199,7 @@ describe('LinearClient', () => {
         url: 'https://linear.app/acme/issue/ABC-1/comment/comment-1',
       }] } } },
     }))
-    const client = new LinearClient({ apiKey: 'lin_api_test', fetchImpl })
+    const client = new LinearClient({ lookupImpl: publicLookup, apiKey: 'lin_api_test', fetchImpl })
     const result = await client.listIssueComments('issue-1')
     expect(result.items[0]).toMatchObject({ author: 'Alice', body: 'Please fix' })
   })
@@ -214,7 +218,7 @@ describe('LinearClient', () => {
           url: 'https://linear.app/acme/issue/ABC-1/comment/comment-1',
         }] } } },
       }))
-    const client = new LinearClient({ apiKey: 'lin_api_test', fetchImpl })
+    const client = new LinearClient({ lookupImpl: publicLookup, apiKey: 'lin_api_test', fetchImpl })
     const result = await client.listIssueComments('ABC-1', { limit: 5 })
 
     expect(result.items[0]).toMatchObject({ author: 'Alice', body: 'Please fix' })
@@ -231,7 +235,7 @@ describe('LinearClient', () => {
         completedAt: null, progress: 0.4,
       }] } } },
     }))
-    const cycles = new LinearClient({ apiKey: 't', fetchImpl: cycleFetch })
+    const cycles = new LinearClient({ lookupImpl: publicLookup, apiKey: 't', fetchImpl: cycleFetch })
     expect(await cycles.listCycles('team-1', { limit: 3 })).toMatchObject([
       { id: 'cycle-1', number: 5, progress: 0.4 },
     ])
@@ -244,7 +248,7 @@ describe('LinearClient', () => {
         url: 'https://linear.app/acme/project/project-1',
       } },
     }))
-    const projects = new LinearClient({ apiKey: 't', fetchImpl: projectFetch })
+    const projects = new LinearClient({ lookupImpl: publicLookup, apiKey: 't', fetchImpl: projectFetch })
     expect(await projects.getProject('project-1')).toMatchObject({
       id: 'project-1',
       status: 'In Progress',
@@ -257,13 +261,13 @@ describe('LinearClient', () => {
         issueCount: 42, updatedAt: '2026-08-02T00:00:00Z',
       } },
     }))
-    const teams = new LinearClient({ apiKey: 't', fetchImpl: teamFetch })
+    const teams = new LinearClient({ lookupImpl: publicLookup, apiKey: 't', fetchImpl: teamFetch })
     expect(await teams.getTeam('team-1')).toMatchObject({ key: 'ABC', issueCount: 42 })
   })
 
   it('lists team labels and workspace labels', async () => {
     const teamFetch = vi.fn(async () => jsonGraphql({ data: { team: { labels: { nodes: [labelNode] } } } }))
-    const teamClient = new LinearClient({ apiKey: 't', fetchImpl: teamFetch })
+    const teamClient = new LinearClient({ lookupImpl: publicLookup, apiKey: 't', fetchImpl: teamFetch })
     expect(await teamClient.listLabels({ teamId: 'team-1', limit: 50 })).toMatchObject([
       { id: 'label-1', name: 'bug', teamKey: 'ABC' },
     ])
@@ -272,7 +276,7 @@ describe('LinearClient', () => {
     expect(teamBody.query).toContain('team(id: $teamId)')
 
     const workspaceFetch = vi.fn(async () => jsonGraphql({ data: { issueLabels: { nodes: [labelNode] } } }))
-    const workspaceClient = new LinearClient({ apiKey: 't', fetchImpl: workspaceFetch })
+    const workspaceClient = new LinearClient({ lookupImpl: publicLookup, apiKey: 't', fetchImpl: workspaceFetch })
     expect(await workspaceClient.listLabels()).toMatchObject([{ id: 'label-1', name: 'bug' }])
     const workspaceBody = JSON.parse(String((workspaceFetch.mock.calls[0] as [string, RequestInit])[1]?.body))
     expect(workspaceBody.query).toContain('issueLabels')
@@ -280,7 +284,7 @@ describe('LinearClient', () => {
 
   it('getLabel maps details and throws 404 when missing', async () => {
     const fetchImpl = vi.fn(async () => jsonGraphql({ data: { issueLabel: labelNode } }))
-    const client = new LinearClient({ apiKey: 't', fetchImpl })
+    const client = new LinearClient({ lookupImpl: publicLookup, apiKey: 't', fetchImpl })
     expect(await client.getLabel('label-1')).toMatchObject({
       id: 'label-1',
       name: 'bug',
@@ -288,7 +292,7 @@ describe('LinearClient', () => {
     })
     expect(String((fetchImpl.mock.calls[0] as [string, RequestInit])[1]?.body)).toContain('issueLabel(id: $id)')
 
-    const missing = new LinearClient({ apiKey: 't', fetchImpl: vi.fn(async () => jsonGraphql({ data: { issueLabel: null } })) })
+    const missing = new LinearClient({ lookupImpl: publicLookup, apiKey: 't', fetchImpl: vi.fn(async () => jsonGraphql({ data: { issueLabel: null } })) })
     await expect(missing.getLabel('missing-label')).rejects.toMatchObject({ status: 404 })
   })
 
@@ -301,7 +305,7 @@ describe('LinearClient', () => {
       email: 'bob@example.com',
     }
     const fetchImpl = vi.fn(async () => jsonGraphql({ data: { users: { nodes: [userNode, bobNode] } } }))
-    const client = new LinearClient({ apiKey: 't', fetchImpl })
+    const client = new LinearClient({ lookupImpl: publicLookup, apiKey: 't', fetchImpl })
 
     expect(await client.listUsers({ query: 'alice' })).toMatchObject([{ id: 'user-1', email: 'alice@example.com' }])
     expect(await client.listUsers({ query: 'support' })).toMatchObject([{ id: 'user-2', email: 'bob@example.com' }])
@@ -314,7 +318,7 @@ describe('LinearClient', () => {
 
   it('getUser maps details and throws 404 when missing', async () => {
     const fetchImpl = vi.fn(async () => jsonGraphql({ data: { user: userNode } }))
-    const client = new LinearClient({ apiKey: 't', fetchImpl })
+    const client = new LinearClient({ lookupImpl: publicLookup, apiKey: 't', fetchImpl })
     expect(await client.getUser('user-1')).toMatchObject({
       id: 'user-1',
       displayName: 'Alice',
@@ -322,13 +326,13 @@ describe('LinearClient', () => {
     })
     expect(String((fetchImpl.mock.calls[0] as [string, RequestInit])[1]?.body)).toContain('user(id: $id)')
 
-    const missing = new LinearClient({ apiKey: 't', fetchImpl: vi.fn(async () => jsonGraphql({ data: { user: null } })) })
+    const missing = new LinearClient({ lookupImpl: publicLookup, apiKey: 't', fetchImpl: vi.fn(async () => jsonGraphql({ data: { user: null } })) })
     await expect(missing.getUser('missing-user')).rejects.toMatchObject({ status: 404 })
   })
 
   it('listWorkflowStates maps team states and clamps the limit', async () => {
     const fetchImpl = vi.fn(async () => jsonGraphql({ data: { team: { states: { nodes: [workflowStateNode] } } } }))
-    const client = new LinearClient({ apiKey: 't', fetchImpl })
+    const client = new LinearClient({ lookupImpl: publicLookup, apiKey: 't', fetchImpl })
     expect(await client.listWorkflowStates('team-1', { limit: 500 })).toMatchObject([
       { id: 'state-1', name: 'In Progress', type: 'started', position: 2 },
     ])
@@ -339,10 +343,82 @@ describe('LinearClient', () => {
 
   it('strips a trailing slash from a baseUrl override and checks hasToken', async () => {
     const fetchImpl = vi.fn(async () => jsonGraphql({ data: { teams: { nodes: [] } } }))
-    const client = new LinearClient({ baseUrl: 'https://linear.example.com/graphql/', fetchImpl })
+    const client = new LinearClient({ lookupImpl: publicLookup, baseUrl: 'https://linear.example.com/graphql/', fetchImpl })
     expect(client.hasToken()).toBe(false)
     await client.listTeams()
     expect(fetchImpl.mock.calls[0][0]).toBe('https://linear.example.com/graphql')
-    expect(new LinearClient({ apiKey: 'x' }).hasToken()).toBe(true)
+    expect(new LinearClient({ lookupImpl: publicLookup, apiKey: 'x' }).hasToken()).toBe(true)
+  })
+})
+
+describe('Linear endpoint security', () => {
+  const valid = { apiKey: 'lin_api_test' }
+
+  it('rejects invalid base URLs without exposing their contents', () => {
+    for (const baseUrl of [
+      'api.linear.app/graphql',
+      'ftp://api.linear.app/graphql',
+      'https://user:secretapi.linear.app/graphql',
+      'https://api.linear.app/graphql?token=secret',
+      'https://api.linear.app/graphql#fragment',
+    ]) {
+      let error: unknown
+      try { new LinearClient({ ...valid, baseUrl }) } catch (thrown) { error = thrown }
+      expect(error).toBeInstanceOf(LinearError)
+      expect(String(error)).not.toContain('secret')
+    }
+  })
+
+  it('rejects literal local, private, and reserved addresses before fetch', async () => {
+    for (const baseUrl of [
+      'http://localhost',
+      'http://service.localhost',
+      'http://service.local',
+      'http://127.0.0.1',
+      'http://169.254.169.254',
+      'http://10.0.0.1',
+      'http://192.168.1.1',
+      'http://192.0.2.1',
+      'http://198.18.0.1',
+      'http://224.0.0.1',
+      'http://192.175.48.1',
+      'http://[::1]',
+      'http://[fc00::1]',
+      'http://[fe80::1]',
+      'http://[fec0::1]',
+      'http://[2001:db8::1]',
+      'http://[2001:3::1]',
+      'http://[2001:4:112::1]',
+      'http://[2001:30::1]',
+      'http://[5f00::1]',
+      'http://[100:0:0:1::1]',
+      'http://[2620:4f:8000::1]',
+      'http://[64:ff9b::7f00:1]',
+      'http://[ff02::1]',
+    ]) {
+      const fetchImpl = vi.fn()
+      await expect(new LinearClient({ ...valid, baseUrl, fetchImpl }).listIssues()).rejects.toMatchObject({ name: 'LinearError' })
+      expect(fetchImpl).not.toHaveBeenCalled()
+    }
+  })
+
+  it('fails closed on blocked, failed, empty, or inconsistent DNS results', async () => {
+    for (const lookupImpl of [
+      async () => [{ address: '192.168.1.10', family: 4 as const }],
+      async () => [{ address: '93.184.216.34', family: 4 as const }, { address: '169.254.169.254', family: 4 as const }],
+      async () => { throw new Error('dns failure') },
+      async () => [],
+      async () => [{ address: '2001:db8::1', family: 4 as const }],
+    ]) {
+      const fetchImpl = vi.fn()
+      await expect(new LinearClient({ ...valid, baseUrl: 'https://linear.example.test', fetchImpl, lookupImpl }).listIssues()).rejects.toMatchObject({ name: 'LinearError' })
+      expect(fetchImpl).not.toHaveBeenCalled()
+    }
+  })
+
+  it('allows a public endpoint that resolves to a public address', async () => {
+    const fetchImpl = vi.fn(async () => new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } }))
+    await new LinearClient({ ...valid, baseUrl: 'https://linear.example.test', fetchImpl, lookupImpl: publicLookup }).listIssues().catch(() => undefined)
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
   })
 })
